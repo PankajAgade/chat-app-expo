@@ -12,6 +12,13 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.pankaj.chatapp",
+      "permissions": [
+        "RECORD_AUDIO",
+        "MODIFY_AUDIO_SETTINGS"
+      ],
+      "newArchEnabled": true,
+      "enableProguardInReleaseBuilds": true,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -56,6 +63,17 @@
     },
     "updates": {
       "url": "https://u.expo.dev/01d7af29-8e70-439d-9fc2-0211b77a6191"
+    },
+    "build": {
+      "development": {
+        "developmentClient": true,
+        "distribution": "internal"
+      },
+      "production": {
+        "android": {
+          "buildType": "apk"
+        }
+      }
     }
   }
 }

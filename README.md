@@ -52,7 +52,7 @@ Join our community of developers creating universal apps.
 
 
 
-
+"buildType": "app-bundle"
 
 <!-- Upload to EAS -->
 npx expo login
@@ -63,3 +63,4 @@ eas project:init
 npx expo export
 
 eas update --branch preview --message "Initial test version"
+
