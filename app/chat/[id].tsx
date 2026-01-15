@@ -3,275 +3,367 @@ import { RootState } from "@/store/store";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import {
-    addDoc,
-    collection,
-    doc,
-    getDoc,
-    onSnapshot,
-    orderBy,
-    query,
-    serverTimestamp,
-    Timestamp,
+  addDoc,
+  collection,
+  doc,
+  getDoc,
+  onSnapshot,
+  orderBy,
+  query,
+  serverTimestamp,
+  setDoc,
+  Timestamp,
+  updateDoc,
 } from "firebase/firestore";
 import { useEffect, useRef, useState } from "react";
 import {
-    ActivityIndicator,
-    FlatList,
-    Keyboard,
-    KeyboardAvoidingView,
-    PermissionsAndroid,
-    Platform,
-    Pressable,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableWithoutFeedback,
-    View,
+  ActivityIndicator,
+  FlatList,
+  PermissionsAndroid,
+  Platform,
+  Pressable,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  View
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useSelector } from "react-redux";
 
-// 1. Import Agora SDK
 import {
-    ChannelProfileType,
-    ClientRoleType,
-    createAgoraRtcEngine,
-    IRtcEngine,
-} from 'react-native-agora';
+  ChannelProfileType,
+  ClientRoleType,
+  createAgoraRtcEngine,
+  IRtcEngine,
+} from "react-native-agora";
 
-// --- AGORA CONFIG ---
-const AGORA_APP_ID = 'ad57886cb9b647d7a57c3b17c60fa720'; // Replace with your ID from Agora Console
-const AGORA_TOKEN = '007eJxTYPC4WPggoWjZxq8t6TPWqXjvbV347gzLxQmOTF5WvRMsX15QYEhMMTW3sDBLTrJMMjMxTzFPNDVPNk4yNE82M0hLNDcyaOJMzWwIZGSY9VGFhZEBAkF8FoaS1OISBgYAv14ggg=='; // Use empty string for testing if token is disabled
+// ================= CONFIG =================
+const AGORA_APP_ID = "ad57886cb9b647d7a57c3b17c60fa720";
+const AGORA_TOKEN = "007eJxTYDDi3/t7T8UtVmut1RMLAnckR79sX7znTWfn52o77TZRtsUKDIkppuYWFmbJSZZJZibmKeaJpubJxkmG5slmBmmJ5kYGbGcyMhsCGRl2fLBjZWSAQBCfhaEktbiEgQEAZL4f0A==";
 
+// ================= TYPES =================
 interface Message {
-    id: string;
-    text: string;
-    senderId: string;
-    createdAt: Timestamp | null;
+  id: string;
+  text: string;
+  senderId: string;
+  createdAt: Timestamp | null;
 }
 
+// ================= COMPONENT =================
 export default function Chat() {
-    const { id } = useLocalSearchParams();
-    const router = useRouter();
-    const currentUser = useSelector((state: RootState) => state.user.data);
-    const flatListRef = useRef<FlatList>(null);
+  const { id } = useLocalSearchParams();
+  const router = useRouter();
+  const currentUser = useSelector((state: RootState) => state.user.data);
 
-    // --- State ---
-    const [messages, setMessages] = useState<Message[]>([]);
-    const [text, setText] = useState("");
-    const [loading, setLoading] = useState(true);
-    const [receiver, setReceiver] = useState<any>(null);
-    const [isJoined, setIsJoined] = useState(false); // Call status
-    
-    const agoraEngineRef = useRef<IRtcEngine>(); 
-    const roomId = currentUser?.id && id ? [currentUser.id, id].sort().join("_") : null;
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [text, setText] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [receiver, setReceiver] = useState<any>(null);
 
-    // 2. Initialize Agora on Mount
-    useEffect(() => {
-        setupAudioSDKEngine();
-        return () => {
-            agoraEngineRef.current?.unregisterEventHandler({});
-            agoraEngineRef.current?.release(); // Clean up
-        };
-    }, []);
+  const [isJoined, setIsJoined] = useState(false);
+  const [incoming, setIncoming] = useState(false);
+  const [devError, setDevError] = useState<string | null>(null);
 
-    const setupAudioSDKEngine = async () => {
-        try {
-            // Request Android Mic Permissions
-            if (Platform.OS === 'android') {
-                await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
-            }
+  const agoraEngineRef = useRef<IRtcEngine | null>(null);
+  const agoraHandlerRef = useRef<any>(null);
 
-            agoraEngineRef.current = createAgoraRtcEngine();
-            const agoraEngine = agoraEngineRef.current;
+  const roomId =
+    currentUser?.id && id ? [currentUser.id, id].sort().join("_") : null;
 
-            await agoraEngine.initialize({ appId: AGORA_APP_ID }); // Initialize
+  // ================= AGORA INIT =================
+  useEffect(() => {
+    initAgora();
+    return cleanup;
+  }, []);
 
-            agoraEngine.registerEventHandler({
-                onJoinChannelSuccess: () => {
-                    setIsJoined(true);
-                },
-                onUserOffline: () => {
-                    leaveCall();
-                },
-                onLeaveChannel: () => {
-                    setIsJoined(false);
-                }
-            });
-        } catch (e) {
-            console.error(e);
-        }
-    };
+  const initAgora = async () => {
+    try {
+      if (Platform.OS === "android") {
+        await PermissionsAndroid.requestMultiple([
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+        ]);
+      }
 
-    // 3. Join Call Logic
-    const joinCall = async () => {
-        if (!roomId) return;
-        try {
-            agoraEngineRef.current?.joinChannel(AGORA_TOKEN, roomId, 0, {
-                channelProfile: ChannelProfileType.ChannelProfileCommunication,
-                clientRoleType: ClientRoleType.ClientRoleBroadcaster,
-                publishMicrophoneTrack: true,
-                autoSubscribeAudio: true,
-            });
-        } catch (e) {
-            console.error(e);
-        }
-    };
+      const engine = createAgoraRtcEngine();
+      agoraEngineRef.current = engine;
 
-    // 4. Leave Call Logic
-    const leaveCall = () => {
-        agoraEngineRef.current?.leaveChannel();
-    };
+      await engine.initialize({ appId: AGORA_APP_ID });
 
-    // --- Existing Message Handlers ---
-    useEffect(() => {
-        async function loadReceiver() {
-            if (!id) return;
-            const snap = await getDoc(doc(db, "Users", id as string));
-            if (snap.exists()) setReceiver(snap.data());
-        }
-        loadReceiver();
-    }, [id]);
+      engine.setChannelProfile(ChannelProfileType.ChannelProfileCommunication);
+      engine.setClientRole(ClientRoleType.ClientRoleBroadcaster);
+      engine.enableAudio();
 
-    useEffect(() => {
-        if (!roomId) return;
-        const q = query(collection(db, "Messages", roomId, "chats"), orderBy("createdAt", "asc"));
-        const unsubscribe = onSnapshot(q, (snap) => {
-            const msgs = snap.docs.map(d => ({ id: d.id, ...d.data() })) as Message[];
-            setMessages(msgs);
-            setLoading(false);
-        });
-        return () => unsubscribe();
-    }, [roomId]);
+      agoraHandlerRef.current = {
+        onJoinChannelSuccess: () => setIsJoined(true),
+        onUserOffline: () => endCall(),
+        onLeaveChannel: () => setIsJoined(false),
+        onError: (e: any) => setDevError("Agora error: " + e),
+      };
 
-    const sendMessage = async () => {
-        if (!text.trim() || !roomId || !currentUser?.id) return;
-        const tempText = text;
-        setText("");
-        await addDoc(collection(db, "Messages", roomId, "chats"), {
-            text: tempText,
-            senderId: currentUser.id,
-            createdAt: serverTimestamp(),
-        });
-    };
+      engine.registerEventHandler(agoraHandlerRef.current);
+    } catch (e: any) {
+      setDevError("Agora init failed: " + e.message);
+    }
+  };
 
-    const formatTime = (ts: Timestamp | null) => {
-        if (!ts) return "";
-        const date = ts.toDate();
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
-    };
+  const cleanup = async () => {
+    try {
+      if (agoraHandlerRef.current)
+        agoraEngineRef.current?.unregisterEventHandler(agoraHandlerRef.current);
 
-    if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#2C3E50" /></View>;
+      await agoraEngineRef.current?.leaveChannel();
+      await agoraEngineRef.current?.release();
+    } catch {}
+  };
 
-    return (
-        <SafeAreaView style={styles.safeArea}>
-            <StatusBar barStyle="dark-content" backgroundColor="#fff" />
-            
-            {/* Branded Header with Call Button */}
-            <View style={styles.header}>
-                <Pressable onPress={() => router.back()} style={styles.backBtn}>
-                    <Ionicons name="chevron-back" size={24} color="#333" />
-                </Pressable>
-                <View style={styles.avatar}>
-                    <Text style={styles.avatarText}>{receiver?.name?.[0] || "U"}</Text>
-                </View>
-                <View style={styles.headerInfo}>
-                    <Text style={styles.headerName}>{receiver?.name || "User"}</Text>
-                    <Text style={styles.headerStatus}>{isJoined ? "In Call" : "Active now"}</Text>
-                </View>
+  // ================= CALL SIGNALING =================
+  useEffect(() => {
+    if (!roomId || !currentUser?.id) return;
 
-                {/* Call Action Button */}
-                <Pressable 
-                    style={[styles.callBtn, isJoined && { backgroundColor: '#FF5252' }]} 
-                    onPress={isJoined ? leaveCall : joinCall}
-                >
-                    <Ionicons name={isJoined ? "close" : "call"} size={18} color={isJoined ? "#fff" : "#2C3454"} />
-                    <Text style={[styles.callBtnText, isJoined && { color: '#fff' }]}>
-                        {isJoined ? "End" : "Call"}
-                    </Text>
-                </Pressable>
-            </View>
+    const unsub = onSnapshot(doc(db, "Calls", roomId), (snap) => {
+      const data = snap.data();
+      if (!data) return;
 
-            {/* Timer Bar (Visible during call) */}
-            {isJoined && (
-                <View style={styles.timerBar}>
-                    <Text style={styles.timerText}>00:14</Text>
-                    <Text style={styles.timerText}>₹ 8.17</Text>
-                </View>
-            )}
+      if (data.status === "calling" && data.receiverId === currentUser.id)
+        setIncoming(true);
 
-            <KeyboardAvoidingView
-                style={{ flex: 1 }}
-                behavior={Platform.OS === "ios" ? "padding" : "height"}
-                keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
-            >
-                <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-                    <View style={styles.container}>
-                        <FlatList
-                            ref={flatListRef}
-                            data={messages}
-                            keyExtractor={item => item.id}
-                            contentContainerStyle={{ padding: 15, paddingBottom: 20 }}
-                            onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-                            renderItem={({ item }) => {
-                                const isMine = item.senderId === currentUser?.id;
-                                return (
-                                    <View style={[styles.bubble, isMine ? styles.myBubble : styles.otherBubble]}>
-                                        <Text style={[styles.messageText, isMine && { color: "#fff" }]}>{item.text}</Text>
-                                        <Text style={[styles.timeText, isMine && { color: "#ccc" }]}>{formatTime(item.createdAt)}</Text>
-                                    </View>
-                                );
-                            }}
-                        />
+      if (data.status === "accepted") joinAgora();
+      if (data.status === "ended") endCall();
+    });
 
-                        <View style={styles.inputWrapper}>
-                            <View style={styles.inputContainer}>
-                                <TextInput
-                                    style={styles.input}
-                                    value={text}
-                                    onChangeText={setText}
-                                    placeholder="Type your message..."
-                                    placeholderTextColor="#999"
-                                    underlineColorAndroid="transparent"
-                                />
-                            </View>
-                            <Pressable onPress={sendMessage} style={styles.sendIconContainer}>
-                                <Ionicons name="send" size={20} color="#fff" />
-                            </Pressable>
-                        </View>
-                    </View>
-                </TouchableWithoutFeedback>
-            </KeyboardAvoidingView>
-        </SafeAreaView>
+    return () => unsub();
+  }, [roomId]);
+
+  const startCall = async () => {
+    try {
+      if (!roomId || !currentUser?.id || !id) return;
+      await setDoc(doc(db, "Calls", roomId), {
+        status: "calling",
+        callerId: currentUser.id,
+        receiverId: id,
+        createdAt: serverTimestamp(),
+      });
+    } catch (e: any) {
+      setDevError("Start call error: " + e.message);
+    }
+  };
+
+  const acceptCall = async () => {
+    try {
+      await updateDoc(doc(db, "Calls", roomId!), { status: "accepted" });
+      setIncoming(false);
+    } catch (e: any) {
+      setDevError("Accept call error: " + e.message);
+    }
+  };
+
+  const endCall = async () => {
+    try {
+      if (!roomId) return;
+      await updateDoc(doc(db, "Calls", roomId), { status: "ended" });
+      await agoraEngineRef.current?.leaveChannel();
+      setIsJoined(false);
+      setIncoming(false);
+    } catch (e: any) {
+      setDevError("End call error: " + e.message);
+    }
+  };
+
+  const joinAgora = async () => {
+    try {
+      if (!roomId) return;
+      await agoraEngineRef.current?.joinChannel(AGORA_TOKEN, roomId, 0, {});
+    } catch (e: any) {
+      setDevError("Join channel error: " + e.message);
+    }
+  };
+
+  // ================= CHAT =================
+  useEffect(() => {
+    if (!id) return;
+    getDoc(doc(db, "Users", id as string)).then((snap) =>
+      snap.exists() && setReceiver(snap.data())
     );
+  }, [id]);
+
+  useEffect(() => {
+    if (!roomId) return;
+    const q = query(
+      collection(db, "Messages", roomId, "chats"),
+      orderBy("createdAt", "asc")
+    );
+
+    return onSnapshot(q, (snap) => {
+      const msgs = snap.docs.map((d) => ({ id: d.id, ...d.data() })) as Message[];
+      setMessages(msgs);
+      setLoading(false);
+    });
+  }, [roomId]);
+
+  const sendMessage = async () => {
+    if (!text.trim() || !roomId || !currentUser?.id) return;
+    setText("");
+    await addDoc(collection(db, "Messages", roomId, "chats"), {
+      text,
+      senderId: currentUser.id,
+      createdAt: serverTimestamp(),
+    });
+  };
+
+  // ================= UI =================
+  if (loading)
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <StatusBar barStyle="dark-content" />
+
+      {/* DEV ERROR PANEL */}
+      {devError && (
+        <View style={styles.devErrorBox}>
+          <Text style={styles.devErrorTitle}>DEV ERROR</Text>
+          <Text style={styles.devErrorText}>{devError}</Text>
+          <Pressable onPress={() => setDevError(null)} style={styles.devClose}>
+            <Text style={{ color: "#fff" }}>Dismiss</Text>
+          </Pressable>
+        </View>
+      )}
+
+      {/* HEADER */}
+      <View style={styles.header}>
+        <Pressable onPress={() => router.back()}>
+          <Ionicons name="chevron-back" size={24} />
+        </Pressable>
+
+        <View style={styles.headerCenter}>
+          <Text style={styles.headerName}>{receiver?.name || "User"}</Text>
+          <Text style={styles.headerStatus}>
+            {isJoined ? "In Call" : "Active"}
+          </Text>
+        </View>
+
+        <Pressable
+          style={[styles.callBtn, isJoined && { backgroundColor: "#E11D48" }]}
+          onPress={isJoined ? endCall : startCall}
+        >
+          <Ionicons name={isJoined ? "close" : "call"} size={18} color="#fff" />
+        </Pressable>
+      </View>
+
+      {/* INCOMING CALL */}
+      {incoming && (
+        <View style={styles.incoming}>
+          <Text style={{ fontWeight: "700" }}>Incoming Call</Text>
+          <View style={{ flexDirection: "row", marginTop: 10 }}>
+            <Pressable style={styles.accept} onPress={acceptCall}>
+              <Text style={{ color: "#fff" }}>Accept</Text>
+            </Pressable>
+            <Pressable style={styles.reject} onPress={endCall}>
+              <Text style={{ color: "#fff" }}>Reject</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
+      {/* CHAT */}
+      <FlatList
+        data={messages}
+        keyExtractor={(i) => i.id}
+        renderItem={({ item }) => (
+          <View
+            style={[
+              styles.bubble,
+              item.senderId === currentUser?.id
+                ? styles.myBubble
+                : styles.otherBubble,
+            ]}
+          >
+            <Text style={{ color: "#fff" }}>{item.text}</Text>
+          </View>
+        )}
+      />
+
+      <View style={styles.inputRow}>
+        <TextInput
+          value={text}
+          onChangeText={setText}
+          style={styles.input}
+          placeholder="Type message..."
+        />
+        <Pressable onPress={sendMessage} style={styles.sendBtn}>
+          <Ionicons name="send" size={18} color="#fff" />
+        </Pressable>
+      </View>
+    </SafeAreaView>
+  );
 }
 
+// ================= STYLES =================
 const styles = StyleSheet.create({
-    safeArea: { flex: 1, backgroundColor: "#fff", paddingTop: Platform.OS === "android" ? StatusBar.currentHeight : 0 },
-    center: { flex: 1, justifyContent: "center", alignItems: "center" },
-    container: { flex: 1, backgroundColor: "#F9FAFB" },
-    header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 15, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: "#EEE", backgroundColor: "#fff" },
-    backBtn: { paddingRight: 10 },
-    avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: "#2C3454", justifyContent: "center", alignItems: "center" },
-    avatarText: { color: "#FFF", fontWeight: "bold" },
-    headerInfo: { flex: 1, marginLeft: 10 },
-    headerName: { fontSize: 16, fontWeight: "700", color: "#333" },
-    headerStatus: { fontSize: 12, color: "#27AE60" },
-    
-    // Call Button
-    callBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F3F4F6', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 15 },
-    callBtnText: { marginLeft: 5, fontSize: 12, fontWeight: '600', color: '#2C3454' },
+  safeArea: { flex: 1 },
+  center: { flex: 1, justifyContent: "center", alignItems: "center" },
 
-    timerBar: { backgroundColor: '#1E293B', flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 6 },
-    timerText: { color: '#fff', fontSize: 13, fontWeight: '600' },
-    bubble: { maxWidth: "80%", padding: 12, borderRadius: 15, marginVertical: 5, elevation: 1 },
-    myBubble: { alignSelf: "flex-end", backgroundColor: "#2C3454", borderBottomRightRadius: 2 },
-    otherBubble: { alignSelf: "flex-start", backgroundColor: "#FFF", borderWidth: 1, borderColor: "#E5E7EB", borderBottomLeftRadius: 2 },
-    messageText: { fontSize: 15, lineHeight: 20 },
-    timeText: { fontSize: 10, marginTop: 4, alignSelf: "flex-end", color: "#999" },
-    inputWrapper: { flexDirection: "row", alignItems: "center", padding: 10, backgroundColor: "#FFF", borderTopWidth: 1, borderTopColor: '#EEE' },
-    inputContainer: { flex: 1, backgroundColor: "#F3F4F6", borderRadius: 25, paddingHorizontal: 15, marginRight: 10 },
-    input: { height: 45, color: "#333", textAlignVertical: 'center' },
-    sendIconContainer: { width: 45, height: 45, borderRadius: 22.5, backgroundColor: "#2C3454", justifyContent: "center", alignItems: "center", elevation: 2 },
+  header: {
+    flexDirection: "row",
+    padding: 12,
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+
+  headerCenter: { alignItems: "center" },
+  headerName: { fontWeight: "700" },
+  headerStatus: { fontSize: 12, color: "#16A34A" },
+
+  callBtn: {
+    backgroundColor: "#2563EB",
+    padding: 8,
+    borderRadius: 20,
+  },
+
+  incoming: {
+    backgroundColor: "#FEF3C7",
+    padding: 12,
+    alignItems: "center",
+  },
+
+  accept: { backgroundColor: "#16A34A", padding: 10, borderRadius: 8 },
+  reject: { backgroundColor: "#DC2626", padding: 10, borderRadius: 8 },
+
+  bubble: { margin: 6, padding: 10, borderRadius: 12 },
+  myBubble: { backgroundColor: "#2563EB", alignSelf: "flex-end" },
+  otherBubble: { backgroundColor: "#64748B", alignSelf: "flex-start" },
+
+  inputRow: { flexDirection: "row", padding: 10 },
+  input: { flex: 1, borderWidth: 1, borderRadius: 20, paddingHorizontal: 12 },
+  sendBtn: {
+    backgroundColor: "#2563EB",
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    justifyContent: "center",
+    alignItems: "center",
+    marginLeft: 8,
+  },
+
+  devErrorBox: {
+    backgroundColor: "#7F1D1D",
+    padding: 12,
+    margin: 10,
+    borderRadius: 10,
+  },
+  devErrorTitle: { color: "#FCA5A5", fontWeight: "800" },
+  devErrorText: { color: "#FEE2E2", fontSize: 12 },
+  devClose: {
+    marginTop: 6,
+    backgroundColor: "#DC2626",
+    padding: 6,
+    borderRadius: 6,
+    alignSelf: "flex-start",
+  },
 });

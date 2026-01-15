@@ -14,8 +14,13 @@
     "android": {
       "package": "com.pankaj.chatapp",
       "permissions": [
+        "INTERNET",
         "RECORD_AUDIO",
-        "MODIFY_AUDIO_SETTINGS"
+        "MODIFY_AUDIO_SETTINGS",
+        "CAMERA",
+        "ACCESS_NETWORK_STATE",
+        "ACCESS_WIFI_STATE",
+        "BLUETOOTH_CONNECT"
       ],
       "newArchEnabled": true,
       "enableProguardInReleaseBuilds": true,
